@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace matcracker\BlocksConverter;
 
 use pocketmine\block\Block;
+use pocketmine\block\SignPost;
+use pocketmine\block\WallSign;
 use pocketmine\level\format\EmptySubChunk;
 use pocketmine\level\Level;
+use pocketmine\tile\Sign;
 
 class LevelManager
 {
@@ -109,7 +112,7 @@ class LevelManager
     {
         //Conversion report variables
         $status = true;
-        $chunksAnalyzed = $subChunksAnalyzed = $convertedBlocks = 0;
+        $chunksAnalyzed = $subChunksAnalyzed = $convertedBlocks = $convertedSigns = 0;
 
         $time_start = microtime(true);
 
@@ -138,6 +141,22 @@ class LevelManager
 
                 foreach ($this->level->getChunks() as $chunk) {
                     $changed = false;
+                    foreach($chunk->getTiles() as $tile){
+                        if ($tile instanceof Sign){
+                            $convertedSigns++;
+                            for ($i = 0; $i < 4; $i++){
+                                $s = $tile->getLine($i);
+                                if (strpos($s, "[") !== false){
+                                    $split = explode("\"", $s);
+                                    $tile->setLine($i, utf8_decode($split[3]));
+                                    $changed = true;
+                                } else {
+                                    $tile->setLine($i, "");
+                                    $changed = true;
+                                }
+                            }
+                        }
+                    }
                     for ($y = 0; $y < $chunk->getMaxY(); $y++) {
                         $subChunk = $chunk->getSubChunk($y >> 4);
                         if (!($subChunk instanceof EmptySubChunk)) {
@@ -185,6 +204,7 @@ class LevelManager
             $report .= "§bAnalyzed chunks: §a" . $chunksAnalyzed . PHP_EOL;
             $report .= "§bAnalyzed subchunks: §a" . $subChunksAnalyzed . PHP_EOL;
             $report .= "§bBlocks converted: §a" . $convertedBlocks . PHP_EOL;
+            $report .= "§bSigns converted: §a" . $convertedSigns . PHP_EOL;
             $report .= "§d----------";
 
             $this->loader->getLogger()->info(Utils::translateColors($report));
