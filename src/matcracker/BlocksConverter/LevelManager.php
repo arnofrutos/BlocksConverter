@@ -10,6 +10,8 @@ use pocketmine\block\WallSign;
 use pocketmine\level\format\EmptySubChunk;
 use pocketmine\level\Level;
 use pocketmine\tile\Sign;
+use pocketmine\tile\Skull;
+use pocketmine\utils\TextFormat;
 
 class LevelManager
 {
@@ -21,6 +23,27 @@ class LevelManager
     private $level;
     /**@var bool $converting */
     private $converting = false;
+
+    private $chunkcount = 0;
+
+    private $colors = array(
+      "black" => TextFormat::BLACK,
+        "dark_blue" => TextFormat::DARK_BLUE,
+        "dark_green" => TextFormat::DARK_GREEN,
+        "dark_aqua" => TextFormat::DARK_AQUA,
+        "dark_red" => TextFormat::DARK_RED,
+        "dark_purple" => TextFormat::DARK_PURPLE,
+        "old" => TextFormat::GOLD,
+        "gray" => TextFormat::GRAY,
+        "dark_gray" => TextFormat::DARK_GRAY,
+        "blue" => TextFormat::BLUE,
+        "green" => TextFormat::GREEN,
+        "aqua" => TextFormat::AQUA,
+        "red" => TextFormat::RED,
+        "light_purple" => TextFormat::LIGHT_PURPLE,
+        "yellow" => TextFormat::YELLOW,
+        "white" => TextFormat::WHITE
+    );
 
     public function __construct(Loader $loader, Level $level)
     {
@@ -59,23 +82,27 @@ class LevelManager
         return file_exists($this->loader->getDataFolder() . "/backups/" . $this->level->getFolderName());
     }
 
-    private function loadChunks(int $radius) : void
+    private function loadChunks() : void
     {
-        $spawn = $this->level->getSpawnLocation();
-        $x = $spawn->getFloorX() >> 4;
-        $z = $spawn->getFloorZ() >> 4;
+        $map = $this->loader->getServer()->getDataPath() . "/worlds/" . $this->level->getFolderName() . "/region";
 
-        $this->loader->getLogger()->debug("Loading chunks (radius = " . $radius . ") ...");
-        $chunksLoaded = 0;
-        for ($chunkX = -$radius; $chunkX <= $radius; $chunkX++) {
-            for ($chunkZ = -$radius; $chunkZ <= $radius; $chunkZ++) {
-                if (sqrt($chunkX * $chunkX + $chunkZ * $chunkZ) <= $radius) {
-                    $this->level->loadChunk($chunkX + $x, $chunkZ + $z);
-                    $chunksLoaded++;
+        foreach (scandir($map) as $file){
+            if (strlen($file) > 3) {
+                $split = explode(".", $file);
+                $x = (int)$split[1];
+                $z = (int)$split[2];
+                for ($i = $x * 32; $i < ($x + 1) * 32; $i++){
+                    for ($j = $z * 32; $j < ($z + 1) * 32; $j++){
+                        if ($this->level->loadChunk($i, $j, false)){
+                            $this->chunkcount++;
+                        }
+                    }
                 }
             }
         }
-        $this->loader->getLogger()->debug($chunksLoaded . " chunks loaded.");
+
+        $this->loader->getLogger()->info("Total counted chunks: " . + $this->chunkcount);
+        $this->loader->getLogger()->info("Total loaded chunks: " . + count($this->level->getChunks()));
     }
 
     public function unloadLevel() : bool
@@ -137,7 +164,7 @@ class LevelManager
 
             $this->converting = true;
             try {
-                $this->loadChunks($this->loader->getChunkRadius());
+                $this->loadChunks();
 
                 foreach ($this->level->getChunks() as $chunk) {
                     $changed = false;
@@ -147,14 +174,38 @@ class LevelManager
                             for ($i = 0; $i < 4; $i++){
                                 $s = $tile->getLine($i);
                                 if (strpos($s, "[") !== false){
-                                    $split = explode("\"", $s);
-                                    $tile->setLine($i, utf8_decode($split[3]));
-                                    $changed = true;
+                                    $data = json_decode($s, true)["extra"][0];
+                                    $str = "";
+                                    if (is_array($data)){
+                                        if (array_key_exists("bold", $data)){
+                                            $str = $str . TextFormat::BOLD;
+                                        }
+                                        if (array_key_exists("color", $data)){
+                                            $str = $str . $this->colors[$data["color"]];
+                                        }
+                                        $str = $str . json_decode('"' . $data["text"] . '"');
+                                    } else {
+                                        $str = json_decode('"' . $data . '"');
+                                    }
+                                    $this->loader->getLogger()->info("New line: " . $str);
+                                    if ($str != null){
+                                        $tile->setLine($i, $str);
+                                        $changed = true;
+                                    }
+                                    /*PRECOLOR $split = explode("\"", $s);
+                                    $str = json_decode('"' . $split[3] . '"');
+                                    $this->loader->getLogger()->info("New line: " . $str);
+                                    if ($str != null){
+                                        $tile->setLine($i, $str);
+                                        $changed = true;
+                                    }*/
                                 } else {
                                     $tile->setLine($i, "");
                                     $changed = true;
                                 }
                             }
+                        } else if ($tile instanceof Skull){
+                            $this->getLevel()->setBlockIdAt($tile->getX(), $tile->getY(), $tile->getZ(), 0);
                         }
                     }
                     for ($y = 0; $y < $chunk->getMaxY(); $y++) {
@@ -165,18 +216,15 @@ class LevelManager
                                     $blockId = $subChunk->getBlockId($x, $y & 0x0f, $z);
                                     if ($blockId !== Block::AIR) {
                                         $blockData = $subChunk->getBlockData($x, $y & 0x0f, $z);
-                                        foreach (array_keys($this->loader->getBlocksData()) as $blockVal) {
-                                            $split = explode("-", $blockVal);
-                                            $configId = (int)$split[0];
-                                            $configData = (int)$split[1];
+                                        $val = $blockId . "-" . $blockData;
+                                        if (array_key_exists($val, $this->loader->getBlocksData())){
+                                            $d = $this->loader->getBlocksData()[$val];
+                                            $newId = (int)$d["converted-id"];
+                                            $newData = (int)$d["converted-data"];
+                                            $subChunk->setBlock($x, $y & 0x0f, $z, $newId, $newData);
+                                            $changed = true;
+                                            $convertedBlocks++;
 
-                                            if ($blockId === $configId && ($blockData === $configData || $configData === self::IGNORE_DATA_VALUE)) {
-                                                $newId = (int)$this->loader->getBlocksConfig()->getNested("blocks." . $blockVal . ".converted-id");
-                                                $newData = (int)$this->loader->getBlocksConfig()->getNested("blocks." . $blockVal . ".converted-data");
-                                                $subChunk->setBlock($x, $y & 0x0f, $z, $newId, $newData);
-                                                $changed = true;
-                                                $convertedBlocks++;
-                                            }
                                         }
                                     }
                                 }
@@ -186,6 +234,9 @@ class LevelManager
                     }
                     $chunk->setChanged($changed);
                     $chunksAnalyzed++;
+                    if ($chunksAnalyzed % 100 == 0){
+                        $this->loader->getLogger()->info($chunksAnalyzed . "/" . $this->chunkcount . " have been processed (" . $convertedBlocks . " blocks)(" . $convertedSigns . " signs)");
+                    }
                 }
 
                 $this->level->save(true);
